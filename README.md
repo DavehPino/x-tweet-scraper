@@ -20,23 +20,25 @@ Built for the Puente Talent / OPUS Senior Full-Stack assessment (v2).
 ## Table of contents
 
 1. [What it does](#what-it-does)
-2. [Architecture & data flow](#architecture--data-flow)
-3. [The no-browser approach](#the-no-browser-approach)
+2. [Surfaces: what's implemented and why](#surfaces-whats-implemented-and-why)
+3. [Architecture & data flow](#architecture--data-flow)
+4. [The no-browser approach](#the-no-browser-approach)
    - [Finding the guest-reachable surfaces](#finding-the-guest-reachable-surfaces)
    - [Query IDs: where they live and why they change](#query-ids-where-they-live-and-why-they-change)
-4. [Input schema](#input-schema)
-5. [Output schema](#output-schema)
-6. [Free-tier protection (the most important part)](#free-tier-protection-the-most-important-part)
+5. [Input schema](#input-schema)
+6. [Output schema](#output-schema)
+7. [Free-tier protection (the most important part)](#free-tier-protection-the-most-important-part)
    - [Anti-bypass reasoning](#anti-bypass-reasoning)
    - [Anti-fork reasoning](#anti-fork-reasoning)
-7. [Engineering requirements](#engineering-requirements)
-8. [Performance & benchmark](#performance--benchmark)
-9. [Cost awareness](#cost-awareness)
-10. [How to run locally](#how-to-run-locally)
-11. [How to deploy on Apify](#how-to-deploy-on-apify)
-12. [Testing](#testing)
-13. [Known limitations](#known-limitations)
-14. [ToS / robots considerations](#tos--robots-considerations)
+8. [Engineering requirements](#engineering-requirements)
+9. [Performance & benchmark](#performance--benchmark)
+10. [Cost awareness](#cost-awareness)
+11. [How to run locally](#how-to-run-locally)
+12. [How to deploy on Apify](#how-to-deploy-on-apify)
+13. [Testing](#testing)
+14. [Known limitations](#known-limitations)
+15. [ToS / robots considerations](#tos--robots-considerations)
+16. [Trade-offs & key decisions](#trade-offs--key-decisions-short-note)
 
 ---
 
@@ -54,6 +56,18 @@ Implemented surfaces (all guest-reachable):
 | Free-text search (bonus) | `SearchTimeline` (cursor-paginated) | `searchTerms` |
 
 `searchTerms` (free-text search) is implemented with runtime auto-detection: the run probes `SearchTimeline` from its own session/IP. When reachable it pages results through the same dedup/filter/cap pipeline; when X walls it the surface fails closed with a clear error and the run summary records `searchCapability: "walled"` — it never silently returns nothing. Measured Aug 2026: the operation is guest-walled (404 across all products) both from a datacenter IP and from a residential proxy IP, while `UserTweets` returned 200 in the same sessions (see [Known limitations](#known-limitations)).
+
+## Surfaces: what's implemented and why
+
+**Required surfaces (all guest-reachable; all implemented):**
+- **Tweets by author** (`UserTweets`): ✓ Implemented. Core surface powering profile timelines. Paginated with cursor-bottom handling, concurrent scraping across multiple authors, supports all filters. Verified live: 50/50 + 100/100 clean.
+- **Single tweet by id** (`TweetResultByRestId`): ✓ Implemented. Hydrates individual tweets to full schema. Used for direct tweet lookups. Verified live: 1/1 clean.
+- **User profile by handle** (`UserByScreenName`): ✓ Implemented (implicitly as prerequisite). Resolves handle → userId to bootstrap author timeline scrapes. Surfaces author fields (username, name, followers, verified) for each tweet.
+
+**Bonus surface (investigated, implemented with fail-closed design):**
+- **Free-text search** (`SearchTimeline`): ✓ Implemented with runtime auto-detection and fail-closed semantics. Measured Aug 2026: guest tokens return 404 for search from both datacenter and residential IPs across all products (Latest/Top/People/Photos/Videos), while `UserTweets` returns 200 in the same sessions. Rather than assume search is impossible, the actor probes per run and fails closed when walled — never silently returning empty results. If X future changes make guest search reachable, no code changes needed. See §11 bonus and [Known limitations](#known-limitations).
+
+**Why this scoping?** The assessment §2a explicitly values honest reasoning over half-working implementations. The 3 required surfaces are guaranteed guest-reachable and cover all core use cases (timeline scraping, single tweet hydration, user metadata). Search is a measured, fail-closed bonus providing value when available and never hiding failure from the user.
 
 ---
 
@@ -452,7 +466,7 @@ Before running this in production for a client, we'd raise:
 
 ---
 
-## Trade-offs & key decisions (short note)
+## Trade-offs & key decisions
 
 1. **undici over got-scraping** — got-scraping is ESM-only and undici ships first-class proxy support; both are allowed by the assessment. Trade-off: we hand-roll browser headers instead of using got-scraping's header generator.
 2. **Runtime query-ID extraction** — more moving parts than hard-coded IDs, but immune to X deploys; this directly answers the assessment's hint about where IDs live and how they change.
