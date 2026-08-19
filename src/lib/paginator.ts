@@ -32,6 +32,34 @@ export function flattenEntries(instructions: RawInstruction[] | undefined): NonN
     return out;
 }
 
+function isTweetEntry(entry: NonNullable<RawInstruction['entry']>): boolean {
+    return entry.entryId?.startsWith('tweet-') || entry.entryId?.startsWith('profile-conversation-') || false;
+}
+
+/**
+ * Logs the raw shape of a page that produced no usable tweets, so a login-wall
+ * module, a genuinely empty timeline, or a structural change can be told apart
+ * without re-running blind.
+ */
+function logEmptyPage(
+    source: { kind: string; id: string },
+    instructions: RawInstruction[] | undefined,
+    entryIds: (string | undefined)[],
+    level: 'warn' | 'debug' = 'warn',
+): void {
+    const payload = {
+        source,
+        instructionTypes: (instructions ?? []).map((i) => i.type).slice(0, 10),
+        entryIds: entryIds.slice(0, 15),
+        sample: JSON.stringify((instructions ?? [])[0] ?? null).slice(0, 400),
+    };
+    if (level === 'warn') {
+        logger.warn(payload, 'Timeline page yielded no usable tweets (login-wall / empty / structure change)');
+    } else {
+        logger.debug(payload, 'Timeline page yielded no usable tweets');
+    }
+}
+
 /**
  * Pages through a single author's timeline until targetCount conforming,
  * deduplicated items are collected (or the timeline is exhausted).
@@ -59,15 +87,24 @@ export async function scrapeAuthorTimeline(
         if (!instructions?.length) break;
 
         const entries = flattenEntries(instructions);
-        if (entries.length === 0) break;
+        if (entries.length === 0) {
+            logEmptyPage({ kind: 'author', id: userId }, instructions, []);
+            break;
+        }
+
+        const tweetEntries = entries.filter(isTweetEntry);
+        if (tweetEntries.length === 0) {
+            const hasCursor = entries.some((e) => e.entryId?.startsWith('cursor-bottom'));
+            logEmptyPage({ kind: 'author', id: userId }, instructions, entries.map((e) => e.entryId));
+            if (!hasCursor) break;
+        }
 
         cursor = entries.find((e) => e.entryId?.startsWith('cursor-bottom'))?.content?.value;
         const reachedEnd = entries.some((e) => e.entryId?.startsWith('cursor-bottom') && e.content?.value === undefined);
 
         for (const entry of entries) {
             if (collected.length >= options.targetCount) break;
-            const isTweetEntry = entry.entryId?.startsWith('tweet-') || entry.entryId?.startsWith('profile-conversation-');
-            if (!isTweetEntry) continue;
+            if (!isTweetEntry(entry)) continue;
 
             const result = entry.content?.itemContent?.tweet_results?.result;
             if (!result?.rest_id) continue;
@@ -125,15 +162,24 @@ export async function scrapeSearchTimeline(
         if (!instructions?.length) break;
 
         const entries = flattenEntries(instructions);
-        if (entries.length === 0) break;
+        if (entries.length === 0) {
+            logEmptyPage({ kind: 'search', id: rawQuery }, instructions, [], 'debug');
+            break;
+        }
+
+        const tweetEntries = entries.filter(isTweetEntry);
+        if (tweetEntries.length === 0) {
+            const hasCursor = entries.some((e) => e.entryId?.startsWith('cursor-bottom'));
+            logEmptyPage({ kind: 'search', id: rawQuery }, instructions, entries.map((e) => e.entryId), 'debug');
+            if (!hasCursor) break;
+        }
 
         cursor = entries.find((e) => e.entryId?.startsWith('cursor-bottom'))?.content?.value;
         const reachedEnd = entries.some((e) => e.entryId?.startsWith('cursor-bottom') && e.content?.value === undefined);
 
         for (const entry of entries) {
             if (collected.length >= options.targetCount) break;
-            const isTweetEntry = entry.entryId?.startsWith('tweet-') || entry.entryId?.startsWith('profile-conversation-');
-            if (!isTweetEntry) continue;
+            if (!isTweetEntry(entry)) continue;
 
             const result = entry.content?.itemContent?.tweet_results?.result;
             if (!result?.rest_id) continue;

@@ -142,13 +142,26 @@ export class XClient {
         const attempt = async (): Promise<T> => {
             const res = await this.http.get(url, { headers: this.graphqlHeaders() });
             const body = await res.text();
+            if (res.status === 429) {
+                // A rate-limited token is burned: rotating it now means the next
+                // retry (and the catch below) uses a fresh token instead of
+                // hammering the same one for the whole backoff budget.
+                logger.warn({ operation }, 'GraphQL 429, rotating guest token mid-retry');
+                await this.activateGuest();
+                throw new RequestErrorLike(`GraphQL ${operation} failed HTTP 429`, { status: 429 });
+            }
             if (!res.ok) {
                 throw new RequestErrorLike(`GraphQL ${operation} failed HTTP ${res.status}`, { status: res.status });
             }
             return JSON.parse(body) as T;
         };
 
+        // Same-token retries are kept small: 429 (rate limit) and 403 (auth) are
+        // resolved by rotating the token / session, not by burning the backoff
+        // budget on a dead token. The surfaces layer rotates the whole session
+        // (new IP + fresh token) when this still fails.
         return withBackoff(attempt, {
+            attempts: 2,
             onRetry: (attemptNo, delayMs, err) =>
                 logger.warn({ operation, attempt: attemptNo, delayMs, err: String(err) }, 'GraphQL retry'),
         }).catch(async (err: unknown) => {
