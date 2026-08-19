@@ -20,17 +20,25 @@ export const FALLBACK_QUERY_IDS: Record<Operation, string> = {
 let cache: Partial<Record<Operation, string>> = {};
 let bundleCache: { url: string; js: string } | null = null;
 
+export interface BundleResolver {
+    /** x.com homepage HTML from the session warm-up (avoids a second homepage fetch). */
+    homepage?: string;
+    /** Fetches the bundle JS from the given URL. */
+    fetchBundle: (url: string) => Promise<string>;
+}
+
 /** Extracts a queryId for one operation from the main x.com JS bundle. */
-export async function resolveQueryId(operation: Operation, fetcher: (url: string) => Promise<string>): Promise<string> {
+export async function resolveQueryId(operation: Operation, resolver: BundleResolver): Promise<string> {
     const cached = cache[operation];
     if (cached) return cached;
 
     try {
         if (!bundleCache) {
-            bundleCache = { url: await findMainBundleUrl(fetcher), js: '' };
+            const html = resolver.homepage ?? (await resolver.fetchBundle('https://x.com/home'));
+            bundleCache = { url: findMainBundleUrl(html), js: '' };
         }
         if (!bundleCache.js) {
-            bundleCache.js = await fetcher(bundleCache.url);
+            bundleCache.js = await resolver.fetchBundle(bundleCache.url);
         }
         const id = extractQueryId(bundleCache.js, operation);
         if (!id) throw new Error(`queryId not found in bundle for ${operation}`);
@@ -45,8 +53,7 @@ export async function resolveQueryId(operation: Operation, fetcher: (url: string
     }
 }
 
-async function findMainBundleUrl(fetcher: (url: string) => Promise<string>): Promise<string> {
-    const html = await fetcher('https://x.com/home');
+function findMainBundleUrl(html: string): string {
     const preload = html.match(/<link rel="preload" as="script" href="([^"]+\/main\.[^"]+\.js)"/);
     if (preload?.[1]) return preload[1];
     const script = html.match(/<script[^>]+src="([^"]+\/main\.[^"]+\.js)"/);

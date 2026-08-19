@@ -146,7 +146,7 @@ async function scrapeAuthor(
             const remaining = Math.max(0, cap - items.length);
             if (remaining <= 0) return;
             const authorItems = await scrapeAuthorTimeline(client, userId, {
-                countPerPage: 20,
+                countPerPage: 40,
                 targetCount: Math.min(targetPerAuthor, remaining),
                 filters,
                 seen,

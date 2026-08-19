@@ -35,17 +35,22 @@ const COOKIE_KEY = 'cookie';
  */
 export class XClient {
     private readonly http: HttpClient;
+    /** Non-proxied client: the query-ID bundle is a static CDN asset, no proxy needed. */
+    private readonly directHttp: HttpClient;
     private guest: GuestState | null = null;
     private readonly queryIds = new Map<Operation, string>();
     private readonly guestHost: string;
+    private homepageHtml = '';
 
     constructor(options: XClientOptions = {}) {
         this.http = new HttpClient(options.proxyUrl ? { proxyUrl: options.proxyUrl } : {});
+        this.directHttp = new HttpClient();
         this.guestHost = API_HOSTS[0];
     }
 
     close(): void {
         this.http.close();
+        this.directHttp.close();
     }
 
     /** Warmed up + guest-activated + query IDs resolved. Idempotent. */
@@ -55,13 +60,27 @@ export class XClient {
         await this.activateGuest();
         const ops: Operation[] = ['UserByScreenName', 'UserByRestId', 'UserTweets', 'TweetResultByRestId'];
         for (const op of ops) {
-            this.queryIds.set(op, await resolveQueryId(op, (url) => httpGetText(this.http, url)));
+            this.queryIds.set(op, await resolveQueryId(op, { homepage: this.homepageHtml, fetchBundle: (url) => this.fetchBundle(url) }));
+        }
+    }
+
+    /**
+     * Fetches the query-ID bundle. It lives on the abs.twimg.com CDN and does
+     * not need cookies or a proxied IP, so it is fetched direct (fast); on
+     * failure we fall back to the proxied client, and only then to known IDs.
+     */
+    private async fetchBundle(url: string): Promise<string> {
+        try {
+            return await httpGetText(this.directHttp, url);
+        } catch (err) {
+            logger.warn({ err: String(err) }, 'Direct bundle fetch failed, falling back to proxied fetch');
+            return httpGetText(this.http, url);
         }
     }
 
     private async warmUp(): Promise<void> {
         const res = await this.http.get('https://x.com/home');
-        await res.text();
+        this.homepageHtml = await res.text();
         const jar: string[] = [];
         for (const cookie of res.headers.getSetCookie?.() ?? []) {
             jar.push(cookie.split(';')[0] ?? '');
