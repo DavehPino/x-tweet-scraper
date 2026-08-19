@@ -3,7 +3,7 @@ import { type ValidatedInput } from '../validation.js';
 import { type OutputItem, type SortOrder } from '../types.js';
 import { type FilterOptions, filterOptionsFromInput, matchesFilters } from '../filters.js';
 import { XClient, userIdFromProfile, tweetResultFromById } from './x-client.js';
-import { createProxyHandle } from './proxy.js';
+import { createProxyHandle, sessionIdFor } from './proxy.js';
 import { scrapeAuthorTimeline } from './paginator.js';
 import { normalizeTweet } from '../normalizer.js';
 import { CONCURRENCY_PER_TARGET } from '../config.js';
@@ -71,7 +71,7 @@ async function scrapeAuthors(
         if (items.length >= cap) break;
         pool.push(
             (async () => {
-                const sessionId = `author-${handle}`;
+                const sessionId = sessionIdFor(`author-${handle}`);
                 const proxyUrl = await proxy.newUrl(sessionId);
                 const client = new XClient(proxyUrl ? { proxyUrl } : {});
                 try {
@@ -117,7 +117,7 @@ async function scrapeTweetIds(
     for (const id of ids) {
         pool.push(
             (async () => {
-                const sessionId = `tweet-${id}`;
+                const sessionId = sessionIdFor(`tweet-${id}`);
                 const proxyUrl = await proxy.newUrl(sessionId);
                 const client = new XClient(proxyUrl ? { proxyUrl } : {});
                 try {
