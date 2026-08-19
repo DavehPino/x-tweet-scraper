@@ -1,0 +1,38 @@
+{
+  "__typename": "Tweet",
+  "rest_id": "2087572956683567110",
+  "core": {
+    "user_results": {
+      "result": {
+        "rest_id": "3510729917",
+        "is_blue_verified": false,
+        "core": { "created_at": "Tue Sep 01 08:38:01 +0000 2015", "name": "Apify", "screen_name": "apify" },
+        "relationship_counts": { "followers": 12043, "following": 296 },
+        "verification": { "verified": false, "verified_type": "Business" }
+      }
+    }
+  },
+  "legacy": {
+    "created_at": "Wed Aug 12 16:12:32 +0000 2026",
+    "full_text": "Everything runs on Apify. One day. San Francisco. https://t.co/abc123",
+    "id_str": "2087572956683567110",
+    "conversation_id_str": "2087572956683567110",
+    "in_reply_to_status_id_str": null,
+    "lang": "en",
+    "favorite_count": 25,
+    "retweet_count": 3,
+    "reply_count": 2,
+    "quote_count": 1,
+    "bookmark_count": 5,
+    "is_quote_status": false,
+    "user_id_str": "3510729917",
+    "source": "Twitter Web App",
+    "entities": {
+      "hashtags": [{ "text": "buildinpublic" }],
+      "user_mentions": [{ "screen_name": "elonmusk" }],
+      "urls": [{ "url": "https://t.co/abc123", "expanded_url": "https://apify.com" }],
+      "media": []
+    }
+  },
+  "views": { "count": "546" }
+}
