@@ -1,0 +1,9 @@
+node_modules/
+dist/
+test-data/
+apify_storage/
+.apify/
+*.log
+.env
+.DS_Store
+senior-x-scraper-test-v2.md

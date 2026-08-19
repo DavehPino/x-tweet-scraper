@@ -1,0 +1,38 @@
+{
+  "name": "x-tweet-scraper",
+  "version": "1.0.0",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "apify run",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit -p tsconfig.json"
+  },
+  "keywords": [
+    "apify",
+    "actor",
+    "x",
+    "twitter",
+    "scraper"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "description": "Browserless X (Twitter) tweet scraper running as an Apify Actor. Uses X internal GraphQL with guest tokens.",
+  "dependencies": {
+    "apify": "^3.7.2",
+    "got-scraping": "^4.2.1",
+    "pino": "^10.3.1",
+    "undici": "^7.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "apify-cli": "^1.8.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

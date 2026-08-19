@@ -1,0 +1,123 @@
+{
+  "title": "Input schema for x-tweet-scraper",
+  "description": "Targets + filters for scraping public tweets from X. At least one of fromUsers, tweetIds or searchTerms must be provided. All filters combine with AND semantics. Unspecified filters mean 'no constraint'.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "fromUsers": {
+      "title": "From users",
+      "type": "array",
+      "description": "Handles (without @) whose tweets to scrape. Example: [\"apify\", \"elonmusk\"]",
+      "editor": "stringList",
+      "prefill": ["apify"]
+    },
+    "tweetIds": {
+      "title": "Tweet IDs",
+      "type": "array",
+      "description": "Specific tweet IDs to hydrate individually.",
+      "editor": "stringList"
+    },
+    "searchTerms": {
+      "title": "Search terms (bonus)",
+      "type": "array",
+      "description": "Free-text queries. Stretch surface: if unsupported, the run fails with a clear error instead of returning nothing.",
+      "editor": "stringList"
+    },
+    "hashtags": {
+      "title": "Hashtags",
+      "type": "array",
+      "description": "Tweets must contain these hashtags (without #), applied as a post-filter.",
+      "editor": "stringList"
+    },
+    "since": {
+      "title": "Since",
+      "type": "string",
+      "description": "Inclusive window start (ISO-8601 date). Only tweets created at or after this are kept.",
+      "editor": "textfield"
+    },
+    "until": {
+      "title": "Until",
+      "type": "string",
+      "description": "Inclusive window end (ISO-8601 date). Only tweets created at or before this are kept.",
+      "editor": "textfield"
+    },
+    "language": {
+      "title": "Language",
+      "type": "string",
+      "description": "Filter by detected tweet language (ISO-639-1 code, e.g. \"en\").",
+      "editor": "textfield"
+    },
+    "minLikes": {
+      "title": "Min likes",
+      "type": "integer",
+      "description": "Minimum like count (engagement floor).",
+      "minimum": 0,
+      "default": 0
+    },
+    "minRetweets": {
+      "title": "Min retweets",
+      "type": "integer",
+      "description": "Minimum retweet count (engagement floor).",
+      "minimum": 0,
+      "default": 0
+    },
+    "minReplies": {
+      "title": "Min replies",
+      "type": "integer",
+      "description": "Minimum reply count (engagement floor).",
+      "minimum": 0,
+      "default": 0
+    },
+    "onlyVerified": {
+      "title": "Only verified",
+      "type": "boolean",
+      "description": "Only keep tweets from verified authors.",
+      "default": false
+    },
+    "mediaType": {
+      "title": "Media type",
+      "type": "string",
+      "description": "Filter by attached media.",
+      "enum": ["any", "text_only", "images", "video", "links"],
+      "default": "any",
+      "enumTitles": ["Any", "Text only", "Images", "Video", "Links"]
+    },
+    "includeReplies": {
+      "title": "Include replies",
+      "type": "boolean",
+      "description": "Count replies to other users as results.",
+      "default": false
+    },
+    "includeRetweets": {
+      "title": "Include retweets",
+      "type": "boolean",
+      "description": "Count retweets as results.",
+      "default": false
+    },
+    "sortBy": {
+      "title": "Sort by",
+      "type": "string",
+      "description": "Ordering for surfaces that support it.",
+      "enum": ["latest", "top"],
+      "default": "latest",
+      "enumTitles": ["Latest", "Top"]
+    },
+    "maxResults": {
+      "title": "Max results",
+      "type": "integer",
+      "description": "Requested cap. Subject to the free-tier limit (free users always get at most 10).",
+      "minimum": 1,
+      "default": 100
+    },
+    "proxyConfiguration": {
+      "title": "Apify proxy configuration",
+      "type": "object",
+      "description": "Standard Apify proxy settings (groups, country, session).",
+      "editor": "proxy",
+      "prefill": {
+        "useApifyProxy": true,
+        "apifyProxyGroups": ["RESIDENTIAL"]
+      }
+    }
+  }
+}
