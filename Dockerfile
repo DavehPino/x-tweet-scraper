@@ -4,7 +4,7 @@ FROM apify/actor-node:22
 
 # Install all deps (dev deps needed for the build step).
 COPY package.json package-lock.json ./
-RUN npm ci --silent
+RUN npm ci --silent --include=dev
 
 # Copy source and build TypeScript.
 COPY . ./
