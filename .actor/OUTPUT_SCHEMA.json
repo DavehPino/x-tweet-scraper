@@ -1,0 +1,164 @@
+{
+  "type": "object",
+  "required": [
+    "id",
+    "url",
+    "text",
+    "lang",
+    "createdAt",
+    "conversationId",
+    "isReply",
+    "isRetweet",
+    "isQuote",
+    "inReplyToId",
+    "quotedTweetId",
+    "author",
+    "metrics",
+    "entities",
+    "source",
+    "scrapedAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Tweet id (string, never a number)"
+    },
+    "url": {
+      "type": "string",
+      "description": "https://x.com/<user>/status/<id>"
+    },
+    "text": {
+      "type": "string",
+      "description": "Full text, unescaped, links expanded"
+    },
+    "lang": {
+      "type": ["string", "null"],
+      "description": "ISO-639-1"
+    },
+    "createdAt": {
+      "type": "string",
+      "description": "ISO-8601 UTC"
+    },
+    "conversationId": {
+      "type": ["string", "null"]
+    },
+    "isReply": {
+      "type": "boolean"
+    },
+    "isRetweet": {
+      "type": "boolean"
+    },
+    "isQuote": {
+      "type": "boolean"
+    },
+    "inReplyToId": {
+      "type": ["string", "null"]
+    },
+    "quotedTweetId": {
+      "type": ["string", "null"]
+    },
+    "author": {
+      "type": "object",
+      "required": ["id", "username", "name", "verified", "followers", "following"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string",
+          "description": "Handle, no @"
+        },
+        "name": {
+          "type": "string"
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "followers": {
+          "type": "number"
+        },
+        "following": {
+          "type": "number"
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["likes", "retweets", "replies", "quotes", "bookmarks", "views"],
+      "properties": {
+        "likes": {
+          "type": "number"
+        },
+        "retweets": {
+          "type": "number"
+        },
+        "replies": {
+          "type": "number"
+        },
+        "quotes": {
+          "type": "number"
+        },
+        "bookmarks": {
+          "type": ["number", "null"]
+        },
+        "views": {
+          "type": ["number", "null"]
+        }
+      }
+    },
+    "entities": {
+      "type": "object",
+      "required": ["hashtags", "mentions", "urls", "media"],
+      "properties": {
+        "hashtags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Without #"
+        },
+        "mentions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Handles, without @"
+        },
+        "urls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Expanded urls"
+        },
+        "media": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type", "url", "thumbnail"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["photo", "video", "animated_gif"]
+              },
+              "url": {
+                "type": "string"
+              },
+              "thumbnail": {
+                "type": ["string", "null"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "source": {
+      "type": ["string", "null"],
+      "description": "Client app, if exposed"
+    },
+    "scrapedAt": {
+      "type": "string",
+      "description": "ISO-8601 UTC of extraction"
+    }
+  }
+}
