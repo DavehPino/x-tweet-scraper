@@ -1,0 +1,14 @@
+{
+  "actorOutputSchemaVersion": 1,
+  "title": "X Tweet Scraper output",
+  "description": "Dataset of scraped tweets, each with full tweet data (id, text, author, metrics, entities, etc.)",
+  "type": "object",
+  "properties": {
+    "items": {
+      "type": "string",
+      "title": "Tweets",
+      "description": "Scraped tweets in the default dataset. Each item conforms to the exact output schema (id, url, text, lang, createdAt, author, metrics, entities, source, scrapedAt).",
+      "template": "{{links.apiDefaultDatasetUrl}}/items"
+    }
+  }
+}

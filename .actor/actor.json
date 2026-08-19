@@ -5,6 +5,7 @@
   "description": "Scrapes public tweets from X without a browser, using X internal GraphQL with guest tokens. Rich filtering and a tamper-proof free-tier limit.",
   "version": "0.1",
   "input": "./INPUT_SCHEMA.json",
+  "output": "./output_schema.json",
   "dockerfile": "../Dockerfile",
   "readme": "../README.md"
 }
