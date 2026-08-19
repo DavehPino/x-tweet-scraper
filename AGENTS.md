@@ -23,9 +23,9 @@ Guest-reachable (required):
 - Profile by handle — `UserByScreenName`
 
 Bonus (auto-detected, fails closed): free-text search — `SearchTimeline`. X walls it
-for guests (404 on datacenter IPs, verified live Aug 2026); each run probes it from
-its own session/IP (`probeSearch` in x-client.ts) and either pages results or records
-`SEARCH_WALLED` in the summary and skips the term. Never silently empty.
+for guests (404 on datacenter and residential IPs, verified live Aug 2026); each run
+probes it from its own session/IP (`probeSearch` in x-client.ts) and either pages
+results or records `SEARCH_WALLED` in the summary and skips the term. Never silently empty.
 
 No personal credentials. Guest tokens only.
 
@@ -101,11 +101,11 @@ and the search surface (supported probe collects, walled probe fails closed, rat
 - Phase 0 scaffolding — done
 - Phase 1 X client (guest token, runtime query IDs, 3 surfaces) — done, verified live
 - Phase 2 normalizer + filters — done
-- Phase 3 free-tier gate — done in code (live KV verification pending deploy)
+- Phase 3 free-tier gate — done; KV entitlement live (owner resolves paid; fail-closed → free for everyone else)
 - Phase 4 resilience/scale (retry, proxy, paginator, resumer) — done; local time-to-100 22.1 s
 - Phase 5 tests (37) — done
-- Phase 6 search bonus — done in code + tests + live probe (Aug 2026: walled 404 on datacenter; auto-detects per run, fails closed)
-- Phase 7 README + deploy + benchmark — README done; deploy pending
+- Phase 6 search bonus — done in code + tests + live probe (Aug 2026: walled 404 on datacenter AND residential; auto-detects per run, fails closed)
+- Phase 7 README + deploy + benchmark — done; §8 benchmark ~4.9 s to 100 on Apify (grade A), live verification of all surfaces + filters complete
 
 ## Notes
 
