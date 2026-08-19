@@ -7,12 +7,36 @@ import { createProxyHandle, sessionIdFor } from './proxy.js';
 import { scrapeAuthorTimeline } from './paginator.js';
 import { normalizeTweet } from '../normalizer.js';
 import { CONCURRENCY_PER_TARGET } from '../config.js';
-import { bumpFetched, type RunStats } from '../stats.js';
+import { bumpFetched, recordError, type RunStats } from '../stats.js';
+import { sleep } from './retry.js';
 import { type RunState } from './resumer.js';
+
+/** Creates an XClient bound to an optional proxy URL. Injectable for tests. */
+export type XClientFactory = (proxyUrl?: string) => XClient;
+
+export const DEFAULT_CLIENT_FACTORY: XClientFactory = (proxyUrl) => new XClient(proxyUrl ? { proxyUrl } : {});
+
+/** Rotate the session (new proxy IP + fresh guest token) at most this many times per author. */
+const MAX_SESSION_EPOCHS = 3;
+/** Cooldown before re-attempting a rate-limited author on a new session. */
+const ROTATION_COOLDOWN_MS = 1_500;
+
+function errorTypeFor(err: unknown): string {
+    const msg = err instanceof Error ? err.message : String(err);
+    const status = msg.match(/HTTP (\d{3})/);
+    return status ? `HTTP_${status[1]}` : 'UNKNOWN';
+}
+
+function isRateLimited(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    return msg.includes('HTTP 429');
+}
 
 /**
  * Fetches all requested surfaces, applying the shared seen-set and filters,
  * returning up to `cap` deduplicated, schema-conforming items.
+ * Per-target failures degrade gracefully: they are counted in stats.errorCounts
+ * and the run continues with the remaining targets instead of crashing.
  */
 export async function fetchSurface(
     input: ValidatedInput,
@@ -20,6 +44,7 @@ export async function fetchSurface(
     _userId: string | null,
     stats: RunStats,
     state: RunState,
+    clientFactory: XClientFactory = DEFAULT_CLIENT_FACTORY,
 ): Promise<OutputItem[]> {
     if (input.searchTerms?.length) {
         throw new Error('searchTerms is not implemented yet (bonus surface). Please use fromUsers or tweetIds.');
@@ -41,12 +66,12 @@ export async function fetchSurface(
     };
 
     if (input.fromUsers?.length) {
-        await scrapeAuthors(input.fromUsers, filters, cap, seen, items, proxy, collect, stats, state);
+        await scrapeAuthors(input.fromUsers, filters, cap, seen, items, proxy, collect, stats, state, clientFactory);
     }
 
     if (input.tweetIds?.length) {
         const byIdCap = Math.max(0, cap - items.length);
-        await scrapeTweetIds(input.tweetIds.slice(0, byIdCap), proxy, collect, stats);
+        await scrapeTweetIds(input.tweetIds.slice(0, byIdCap), proxy, collect, stats, clientFactory);
     }
 
     applySort(items, input.sortBy);
@@ -63,43 +88,14 @@ async function scrapeAuthors(
     collect: (item: OutputItem | null) => void,
     stats: RunStats,
     state: RunState,
+    clientFactory: XClientFactory,
 ): Promise<void> {
     const targetPerAuthor = Math.ceil(cap / handles.length);
     const pool: Promise<void>[] = [];
 
     for (const handle of handles) {
         if (items.length >= cap) break;
-        pool.push(
-            (async () => {
-                const sessionId = sessionIdFor(`author-${handle}`);
-                const proxyUrl = await proxy.newUrl(sessionId);
-                const client = new XClient(proxyUrl ? { proxyUrl } : {});
-                try {
-                    const profile = await client.getUserByScreenName(handle);
-                    const userId = userIdFromProfile(profile);
-                    if (!userId) {
-                        logger.warn({ handle }, 'No userId resolved for handle');
-                        return;
-                    }
-                    const remaining = Math.max(0, cap - items.length);
-                    if (remaining <= 0) return;
-                    const authorItems = await scrapeAuthorTimeline(client, userId, {
-                        countPerPage: 20,
-                        targetCount: Math.min(targetPerAuthor, remaining),
-                        filters,
-                        seen,
-                        onFetched: () => bumpFetched(stats),
-                        startCursor: state.cursors[handle],
-                        onProgress: (cursor) => {
-                            state.cursors[handle] = cursor;
-                        },
-                    });
-                    for (const item of authorItems) collect(item);
-                } finally {
-                    client.close();
-                }
-            })(),
-        );
+        pool.push(scrapeAuthor(handle, filters, targetPerAuthor, cap, seen, items, proxy, collect, stats, state, clientFactory));
         if (pool.length >= CONCURRENCY_PER_TARGET) {
             await Promise.all(pool.splice(0));
         }
@@ -107,11 +103,73 @@ async function scrapeAuthors(
     if (pool.length) await Promise.all(pool);
 }
 
+/**
+ * Scrapes one author's timeline. On persistent rate limiting the session is
+ * rotated (new proxy IP + fresh guest token) and paging resumes from the last
+ * persisted cursor. Never throws: failures are logged and counted, so a bad
+ * author cannot sink the whole run.
+ */
+async function scrapeAuthor(
+    handle: string,
+    filters: FilterOptions,
+    targetPerAuthor: number,
+    cap: number,
+    seen: Set<string>,
+    items: OutputItem[],
+    proxy: Awaited<ReturnType<typeof createProxyHandle>>,
+    collect: (item: OutputItem | null) => void,
+    stats: RunStats,
+    state: RunState,
+    clientFactory: XClientFactory,
+): Promise<void> {
+    for (let epoch = 0; epoch < MAX_SESSION_EPOCHS; epoch += 1) {
+        const sessionId = sessionIdFor(`author_${handle}_e${epoch}`);
+        const proxyUrl = await proxy.newUrl(sessionId);
+        const client = clientFactory(proxyUrl);
+        try {
+            const profile = await client.getUserByScreenName(handle);
+            const userId = userIdFromProfile(profile);
+            if (!userId) {
+                logger.warn({ handle }, 'No userId resolved for handle');
+                return;
+            }
+            const remaining = Math.max(0, cap - items.length);
+            if (remaining <= 0) return;
+            const authorItems = await scrapeAuthorTimeline(client, userId, {
+                countPerPage: 20,
+                targetCount: Math.min(targetPerAuthor, remaining),
+                filters,
+                seen,
+                onFetched: () => bumpFetched(stats),
+                startCursor: state.cursors[handle],
+                onProgress: (cursor) => {
+                    state.cursors[handle] = cursor;
+                },
+            });
+            for (const item of authorItems) collect(item);
+            return;
+        } catch (err) {
+            const errorType = errorTypeFor(err);
+            recordError(stats, errorType);
+            if (isRateLimited(err) && epoch < MAX_SESSION_EPOCHS - 1) {
+                logger.warn({ handle, epoch, errorType }, 'Author rate-limited; rotating session and retrying');
+                await sleep(ROTATION_COOLDOWN_MS);
+                continue;
+            }
+            logger.warn({ handle, errorType, err: String(err) }, 'Author scrape failed, skipping');
+            return;
+        } finally {
+            client.close();
+        }
+    }
+}
+
 async function scrapeTweetIds(
     ids: string[],
     proxy: Awaited<ReturnType<typeof createProxyHandle>>,
     collect: (item: OutputItem | null) => void,
     stats: RunStats,
+    clientFactory: XClientFactory,
 ): Promise<void> {
     const pool: Promise<void>[] = [];
     for (const id of ids) {
@@ -119,12 +177,15 @@ async function scrapeTweetIds(
             (async () => {
                 const sessionId = sessionIdFor(`tweet-${id}`);
                 const proxyUrl = await proxy.newUrl(sessionId);
-                const client = new XClient(proxyUrl ? { proxyUrl } : {});
+                const client = clientFactory(proxyUrl);
                 try {
                     const response = await client.getTweetById(id);
                     const result = tweetResultFromById(response);
                     bumpFetched(stats);
                     collect(normalizeTweet(result ?? { __typename: 'TweetTombstone' }));
+                } catch (err) {
+                    recordError(stats, errorTypeFor(err));
+                    logger.warn({ id, err: String(err) }, 'TweetById failed, skipping');
                 } finally {
                     client.close();
                 }
