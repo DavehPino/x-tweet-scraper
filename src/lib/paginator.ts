@@ -18,6 +18,8 @@ export interface AuthorTimelineOptions {
     startCursor?: string | undefined;
     /** Persist progress (cursor + seen) so a migrated run resumes. */
     onProgress?: (cursor: string) => void;
+    /** Stream each collected item as it is found (survives mid-pagination errors). */
+    onItem?: (item: OutputItem) => void;
 }
 
 /** Flattens a timeline's instructions into ordered entries. */
@@ -80,6 +82,7 @@ export async function scrapeAuthorTimeline(
             if (!matchesFilters(item, options.filters)) continue;
 
             collected.push(item);
+            options.onItem?.(item);
         }
 
         if (reachedEnd || !cursor) break;

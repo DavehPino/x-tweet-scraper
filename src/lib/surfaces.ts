@@ -16,10 +16,16 @@ export type XClientFactory = (proxyUrl?: string) => XClient;
 
 export const DEFAULT_CLIENT_FACTORY: XClientFactory = (proxyUrl) => new XClient(proxyUrl ? { proxyUrl } : {});
 
+export interface SurfaceOptions {
+    clientFactory?: XClientFactory;
+    /** Cooldown before re-attempting a rate-limited author on a new session. */
+    rotationCooldownMs?: number;
+}
+
 /** Rotate the session (new proxy IP + fresh guest token) at most this many times per author. */
-const MAX_SESSION_EPOCHS = 3;
-/** Cooldown before re-attempting a rate-limited author on a new session. */
-const ROTATION_COOLDOWN_MS = 1_500;
+const MAX_SESSION_EPOCHS = 5;
+/** Default cooldown before re-attempting a rate-limited author on a new session. */
+const ROTATION_COOLDOWN_MS = 3_000;
 
 function errorTypeFor(err: unknown): string {
     const msg = err instanceof Error ? err.message : String(err);
@@ -44,12 +50,14 @@ export async function fetchSurface(
     _userId: string | null,
     stats: RunStats,
     state: RunState,
-    clientFactory: XClientFactory = DEFAULT_CLIENT_FACTORY,
+    options: SurfaceOptions = {},
 ): Promise<OutputItem[]> {
     if (input.searchTerms?.length) {
         throw new Error('searchTerms is not implemented yet (bonus surface). Please use fromUsers or tweetIds.');
     }
 
+    const clientFactory = options.clientFactory ?? DEFAULT_CLIENT_FACTORY;
+    const rotationCooldownMs = options.rotationCooldownMs ?? ROTATION_COOLDOWN_MS;
     const filters = filterOptionsFromInput(input);
     const seen = new Set(state.seen);
     const items: OutputItem[] = [];
@@ -66,7 +74,7 @@ export async function fetchSurface(
     };
 
     if (input.fromUsers?.length) {
-        await scrapeAuthors(input.fromUsers, filters, cap, seen, items, proxy, collect, stats, state, clientFactory);
+        await scrapeAuthors(input.fromUsers, filters, cap, seen, items, proxy, collect, stats, state, clientFactory, rotationCooldownMs);
     }
 
     if (input.tweetIds?.length) {
@@ -89,13 +97,14 @@ async function scrapeAuthors(
     stats: RunStats,
     state: RunState,
     clientFactory: XClientFactory,
+    rotationCooldownMs: number,
 ): Promise<void> {
     const targetPerAuthor = Math.ceil(cap / handles.length);
     const pool: Promise<void>[] = [];
 
     for (const handle of handles) {
         if (items.length >= cap) break;
-        pool.push(scrapeAuthor(handle, filters, targetPerAuthor, cap, seen, items, proxy, collect, stats, state, clientFactory));
+        pool.push(scrapeAuthor(handle, filters, targetPerAuthor, cap, seen, items, proxy, collect, stats, state, clientFactory, rotationCooldownMs));
         if (pool.length >= CONCURRENCY_PER_TARGET) {
             await Promise.all(pool.splice(0));
         }
@@ -121,6 +130,7 @@ async function scrapeAuthor(
     stats: RunStats,
     state: RunState,
     clientFactory: XClientFactory,
+    rotationCooldownMs: number,
 ): Promise<void> {
     for (let epoch = 0; epoch < MAX_SESSION_EPOCHS; epoch += 1) {
         const sessionId = sessionIdFor(`author_${handle}_e${epoch}`);
@@ -141,19 +151,22 @@ async function scrapeAuthor(
                 filters,
                 seen,
                 onFetched: () => bumpFetched(stats),
+                onItem: (item) => collect(item),
                 startCursor: state.cursors[handle],
                 onProgress: (cursor) => {
                     state.cursors[handle] = cursor;
                 },
             });
-            for (const item of authorItems) collect(item);
+            if (authorItems.length > 0) {
+                logger.debug({ handle, epoch, items: authorItems.length }, 'Author timeline collected');
+            }
             return;
         } catch (err) {
             const errorType = errorTypeFor(err);
             recordError(stats, errorType);
             if (isRateLimited(err) && epoch < MAX_SESSION_EPOCHS - 1) {
                 logger.warn({ handle, epoch, errorType }, 'Author rate-limited; rotating session and retrying');
-                await sleep(ROTATION_COOLDOWN_MS);
+                await sleep(rotationCooldownMs);
                 continue;
             }
             logger.warn({ handle, errorType, err: String(err) }, 'Author scrape failed, skipping');

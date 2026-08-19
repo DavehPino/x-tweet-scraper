@@ -59,6 +59,7 @@ class FakeXClient {
     constructor(
         private readonly profile: RawUserByScreenNameResponse,
         private readonly pages: RawUserTweetsResponse[],
+        private readonly emptyBehavior: '500' | '429' = '500',
     ) {}
 
     async getUserByScreenName(): Promise<RawUserByScreenNameResponse> {
@@ -67,7 +68,7 @@ class FakeXClient {
 
     async getUserTweets(): Promise<RawUserTweetsResponse> {
         const page = this.pages.shift();
-        if (!page) throw new Error('GraphQL UserTweets failed HTTP 500');
+        if (!page) throw new Error(`GraphQL UserTweets failed HTTP ${this.emptyBehavior === '429' ? 429 : 500}`);
         return page;
     }
 
@@ -81,12 +82,18 @@ class FakeXClient {
 }
 
 /** Builds a factory whose timeline calls fail with 429 a shared number of times before succeeding. */
-function makeFactory(opts: { profile: RawUserByScreenNameResponse; pages: RawUserTweetsResponse[]; shared429s?: number; always429?: boolean }) {
+function makeFactory(opts: {
+    profile: RawUserByScreenNameResponse;
+    pages: RawUserTweetsResponse[];
+    shared429s?: number;
+    always429?: boolean;
+    emptyBehavior?: '500' | '429';
+}) {
     const clients: FakeXClient[] = [];
     let shared429s = opts.shared429s ?? 0;
 
     const factory: XClientFactory = () => {
-        const client = new FakeXClient(opts.profile, [...opts.pages]);
+        const client = new FakeXClient(opts.profile, [...opts.pages], opts.emptyBehavior ?? '500');
         const origTweets = client.getUserTweets.bind(client);
         client.getUserTweets = async () => {
             if (opts.always429 || shared429s > 0) {
@@ -105,7 +112,7 @@ function makeFactory(opts: { profile: RawUserByScreenNameResponse; pages: RawUse
 async function run(input: ValidatedInput, cap: number, factory: XClientFactory) {
     const stats = createStats(cap);
     const state = createRunState();
-    const items = await fetchSurface(input, cap, null, stats, state, factory);
+    const items = await fetchSurface(input, cap, null, stats, state, { clientFactory: factory, rotationCooldownMs: 0 });
     return { items, stats, state };
 }
 
@@ -124,9 +131,23 @@ describe('fetchSurface (resilience)', () => {
         const { items, stats } = await run({ fromUsers: ['bad'] }, 4, factory);
 
         expect(items).toHaveLength(0);
-        expect(stats.errorCounts.HTTP_429).toBe(3);
-        expect(clients).toHaveLength(3);
+        expect(stats.errorCounts.HTTP_429).toBe(5);
+        expect(clients).toHaveLength(5);
         expect(clients.every((c) => c.closeCalls === 1)).toBe(true);
+    });
+
+    it('keeps items already collected when a later page hits 429 (incremental streaming)', async () => {
+        const { factory, clients } = makeFactory({
+            profile: makeProfile('ug', 'good'),
+            pages: [makePage(['111', '222'], 'cursor-2')],
+            emptyBehavior: '429',
+        });
+        const { items, stats } = await run({ fromUsers: ['good'] }, 4, factory);
+
+        expect(items).toHaveLength(2);
+        expect(items.map((i) => i.id)).toEqual(['111', '222']);
+        expect(stats.errorCounts.HTTP_429).toBe(5);
+        expect(clients).toHaveLength(5);
     });
 
     it('rotates the session and resumes after a transient 429', async () => {
