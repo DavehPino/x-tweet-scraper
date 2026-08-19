@@ -22,7 +22,10 @@ Guest-reachable (required):
 - Single hydrated tweet — `TweetResultByRestId`
 - Profile by handle — `UserByScreenName`
 
-Stretch (not implemented, rejected with a clear error): free-text search — `SearchTimeline` is auth-walled for guests.
+Bonus (auto-detected, fails closed): free-text search — `SearchTimeline`. X walls it
+for guests (404 on datacenter IPs, verified live Aug 2026); each run probes it from
+its own session/IP (`probeSearch` in x-client.ts) and either pages results or records
+`SEARCH_WALLED` in the summary and skips the term. Never silently empty.
 
 No personal credentials. Guest tokens only.
 
@@ -39,7 +42,7 @@ src/
     query-ids.ts     runtime extraction of queryIds from the x.com JS bundle + known fallback
     retry.ts         exponential backoff + jitter; retryable (429/5xx) vs fatal (400/auth)
     proxy.ts         per-session Apify Proxy URL
-    paginator.ts     cursor handling, seen-set, dedup, concurrent paging per author
+    paginator.ts     cursor handling, seen-set, dedup, concurrent paging per author + search terms
     resumer.ts       Actor.on('migrating') + persisted RUN_STATE (cursors + seen-set)
   normalizer.ts      raw GraphQL tweet → exact output contract (null, never omitted)
   filters.ts         post-filters with AND semantics
@@ -74,6 +77,7 @@ test/                filters, normalizer (fixtures), entitlement cap (free + max
 - `npm test` — vitest
 - `npm run dev` — run locally (tsx src/main.ts)
 - `npx tsx scripts/smoke-client.ts` — live client smoke test
+- `npx tsx scripts/smoke-search.ts` — live search-capability probe (re-verify on residential IPs)
 - `npx tsx scripts/benchmark.ts` — local time-to-100 benchmark
 - Local run without an Apify token:
 
@@ -89,7 +93,8 @@ test/                filters, normalizer (fixtures), entitlement cap (free + max
 ## Testing
 
 Vitest; run with `npm test`. Suites cover input validation, the exact output contract (with fixtures),
-AND filter semantics, and the free-tier cap proof (free user with `maxResults: 1000` still receives 10).
+AND filter semantics, the free-tier cap proof (free user with `maxResults: 1000` still receives 10),
+and the search surface (supported probe collects, walled probe fails closed, rate-limited rotation).
 
 ## Status
 
@@ -98,8 +103,8 @@ AND filter semantics, and the free-tier cap proof (free user with `maxResults: 1
 - Phase 2 normalizer + filters — done
 - Phase 3 free-tier gate — done in code (live KV verification pending deploy)
 - Phase 4 resilience/scale (retry, proxy, paginator, resumer) — done; local time-to-100 22.1 s
-- Phase 5 tests (23) — done
-- Phase 6 search bonus — pending
+- Phase 5 tests (37) — done
+- Phase 6 search bonus — done in code + tests + live probe (Aug 2026: walled 404 on datacenter; auto-detects per run, fails closed)
 - Phase 7 README + deploy + benchmark — README done; deploy pending
 
 ## Notes

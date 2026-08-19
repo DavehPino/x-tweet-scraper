@@ -96,3 +96,6 @@ export type Surface = (typeof SURFACES)[number];
 
 export const FREE_TIER_CAP = 10;
 export const FREE_TIER_REASON = 'free_tier';
+
+/** Runtime observation of whether the SearchTimeline guest surface is reachable. */
+export type SearchCapability = 'supported' | 'walled' | 'rate_limited';

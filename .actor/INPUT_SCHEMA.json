@@ -20,7 +20,7 @@
     "searchTerms": {
       "title": "Search terms (bonus)",
       "type": "array",
-      "description": "Free-text queries. Stretch surface: if unsupported, the run fails with a clear error instead of returning nothing.",
+      "description": "Free-text queries. This surface auto-detects at runtime whether X's search timeline is reachable for guests from the run's IP/session (it is frequently auth-walled). If unreachable, the run fails closed with a clear error instead of silently returning nothing.",
       "editor": "stringList"
     },
     "hashtags": {

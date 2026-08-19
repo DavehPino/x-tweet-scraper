@@ -4,6 +4,7 @@ import { FEATURES, type FeatureSet } from './features.js';
 import { HttpClient, httpGetText } from './http.js';
 import { resolveQueryId, type Operation } from './query-ids.js';
 import {
+    type RawSearchTimelineResponse,
     type RawTweetByIdResponse,
     type RawTweetResult,
     type RawUserByScreenNameResponse,
@@ -11,6 +12,7 @@ import {
     type RawUserTweetsResponse,
 } from './raw-types.js';
 import { RequestErrorLike, withBackoff } from './retry.js';
+import { type SearchCapability } from '../types.js';
 
 export interface XClientOptions {
     proxyUrl?: string;
@@ -58,7 +60,7 @@ export class XClient {
         if (this.guest) return;
         await this.warmUp();
         await this.activateGuest();
-        const ops: Operation[] = ['UserByScreenName', 'UserByRestId', 'UserTweets', 'TweetResultByRestId'];
+        const ops: Operation[] = ['UserByScreenName', 'UserByRestId', 'UserTweets', 'TweetResultByRestId', 'SearchTimeline'];
         for (const op of ops) {
             this.queryIds.set(op, await resolveQueryId(op, { homepage: this.homepageHtml, fetchBundle: (url) => this.fetchBundle(url) }));
         }
@@ -210,6 +212,39 @@ export class XClient {
             },
             'tweetById',
         );
+    }
+
+    /** Free-text search timeline (bonus surface). Guests are frequently walled (404). */
+    async searchTimeline(rawQuery: string, options: { product?: string; count?: number; cursor?: string } = {}): Promise<RawSearchTimelineResponse> {
+        return this.graphql<RawSearchTimelineResponse>(
+            'SearchTimeline',
+            {
+                rawQuery,
+                count: options.count ?? 20,
+                cursor: options.cursor ?? '',
+                querySource: 'typed_query',
+                product: options.product ?? 'Latest',
+                includePromotedContent: false,
+            },
+            'search',
+        );
+    }
+}
+
+/**
+ * Probes whether SearchTimeline is guest-reachable from the current session/IP.
+ * X hides auth-walled operations behind 404 (rather than 401), so any non-200
+ * response other than rate limiting is treated as walled (fail-closed).
+ */
+export async function probeSearch(client: XClient): Promise<SearchCapability> {
+    try {
+        const response = await client.searchTimeline('x', { count: 1, product: 'Latest' });
+        const instructions = response?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions;
+        return Array.isArray(instructions) ? 'supported' : 'walled';
+    } catch (err) {
+        const status = err instanceof RequestErrorLike ? err.status : undefined;
+        if (status === 429) return 'rate_limited';
+        return 'walled';
     }
 }
 

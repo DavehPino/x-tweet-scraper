@@ -2,12 +2,12 @@ import { logger } from '../logger.js';
 import { type ValidatedInput } from '../validation.js';
 import { type OutputItem, type SortOrder } from '../types.js';
 import { type FilterOptions, filterOptionsFromInput, matchesFilters } from '../filters.js';
-import { XClient, userIdFromProfile, tweetResultFromById } from './x-client.js';
+import { XClient, probeSearch, userIdFromProfile, tweetResultFromById } from './x-client.js';
 import { createProxyHandle, sessionIdFor } from './proxy.js';
-import { scrapeAuthorTimeline } from './paginator.js';
+import { scrapeAuthorTimeline, scrapeSearchTimeline } from './paginator.js';
 import { normalizeTweet } from '../normalizer.js';
 import { CONCURRENCY_PER_TARGET } from '../config.js';
-import { bumpFetched, recordError, type RunStats } from '../stats.js';
+import { bumpFetched, recordError, setSearchCapability, type RunStats } from '../stats.js';
 import { sleep } from './retry.js';
 import { type RunState } from './resumer.js';
 
@@ -52,10 +52,6 @@ export async function fetchSurface(
     state: RunState,
     options: SurfaceOptions = {},
 ): Promise<OutputItem[]> {
-    if (input.searchTerms?.length) {
-        throw new Error('searchTerms is not implemented yet (bonus surface). Please use fromUsers or tweetIds.');
-    }
-
     const clientFactory = options.clientFactory ?? DEFAULT_CLIENT_FACTORY;
     const rotationCooldownMs = options.rotationCooldownMs ?? ROTATION_COOLDOWN_MS;
     const filters = filterOptionsFromInput(input);
@@ -80,6 +76,10 @@ export async function fetchSurface(
     if (input.tweetIds?.length) {
         const byIdCap = Math.max(0, cap - items.length);
         await scrapeTweetIds(input.tweetIds.slice(0, byIdCap), proxy, collect, stats, clientFactory);
+    }
+
+    if (input.searchTerms?.length) {
+        await scrapeSearch(input.searchTerms, filters, cap, seen, items, proxy, collect, stats, state, clientFactory, rotationCooldownMs, input.sortBy);
     }
 
     applySort(items, input.sortBy);
@@ -217,5 +217,115 @@ function applySort(items: OutputItem[], sortBy: SortOrder | undefined): void {
         items.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
     } else {
         items.sort((a, b) => b.metrics.likes - a.metrics.likes);
+    }
+}
+
+/** Maps the input sortBy onto the search timeline product. */
+function searchProductFor(sortBy: SortOrder | undefined): string {
+    return sortBy === 'top' ? 'Top' : 'Latest';
+}
+
+/** Resume cursor key for a search term (namespaced away from author cursors). */
+function searchCursorKey(term: string): string {
+    return `search:${term}`;
+}
+
+/**
+ * Scrapes free-text search terms. The SearchTimeline operation is frequently
+ * auth-walled for guests (404) — each term's session is probed first and the
+ * result recorded in the run summary. Walled/rate-limited terms degrade
+ * gracefully (logged + counted) instead of sinking the run, and the summary
+ * never claims results that were silently skipped.
+ */
+async function scrapeSearch(
+    terms: string[],
+    filters: FilterOptions,
+    cap: number,
+    seen: Set<string>,
+    items: OutputItem[],
+    proxy: Awaited<ReturnType<typeof createProxyHandle>>,
+    collect: (item: OutputItem | null) => void,
+    stats: RunStats,
+    state: RunState,
+    clientFactory: XClientFactory,
+    rotationCooldownMs: number,
+    sortBy: SortOrder | undefined,
+): Promise<void> {
+    const pool: Promise<void>[] = [];
+
+    for (const term of terms) {
+        if (items.length >= cap) break;
+        pool.push(scrapeSearchTerm(term, filters, cap, seen, items, proxy, collect, stats, state, clientFactory, rotationCooldownMs, sortBy));
+        if (pool.length >= CONCURRENCY_PER_TARGET) {
+            await Promise.all(pool.splice(0));
+        }
+    }
+    if (pool.length) await Promise.all(pool);
+}
+
+async function scrapeSearchTerm(
+    term: string,
+    filters: FilterOptions,
+    cap: number,
+    seen: Set<string>,
+    items: OutputItem[],
+    proxy: Awaited<ReturnType<typeof createProxyHandle>>,
+    collect: (item: OutputItem | null) => void,
+    stats: RunStats,
+    state: RunState,
+    clientFactory: XClientFactory,
+    rotationCooldownMs: number,
+    sortBy: SortOrder | undefined,
+): Promise<void> {
+    for (let epoch = 0; epoch < MAX_SESSION_EPOCHS; epoch += 1) {
+        const sessionId = sessionIdFor(`search_${term}_e${epoch}`);
+        const proxyUrl = await proxy.newUrl(sessionId);
+        const client = clientFactory(proxyUrl);
+        try {
+            const capability = await probeSearch(client);
+            setSearchCapability(stats, capability);
+            if (capability !== 'supported') {
+                recordError(stats, capability === 'rate_limited' ? 'SEARCH_RATE_LIMITED' : 'SEARCH_WALLED');
+                if (capability === 'rate_limited' && epoch < MAX_SESSION_EPOCHS - 1) {
+                    logger.warn({ term, epoch }, 'Search probe rate-limited; rotating session');
+                    await sleep(rotationCooldownMs);
+                    continue;
+                }
+                logger.warn({ term, capability }, 'Search not reachable for this session/IP; skipping term');
+                return;
+            }
+
+            const remaining = Math.max(0, cap - items.length);
+            if (remaining <= 0) return;
+            const termItems = await scrapeSearchTimeline(client, term, {
+                countPerPage: 40,
+                targetCount: remaining,
+                product: searchProductFor(sortBy),
+                filters,
+                seen,
+                onFetched: () => bumpFetched(stats),
+                onItem: (item) => collect(item),
+                startCursor: state.cursors[searchCursorKey(term)],
+                onProgress: (cursor) => {
+                    state.cursors[searchCursorKey(term)] = cursor;
+                },
+            });
+            if (termItems.length > 0) {
+                logger.debug({ term, epoch, items: termItems.length }, 'Search results collected');
+            }
+            return;
+        } catch (err) {
+            const errorType = errorTypeFor(err);
+            recordError(stats, errorType);
+            if (isRateLimited(err) && epoch < MAX_SESSION_EPOCHS - 1) {
+                logger.warn({ term, epoch, errorType }, 'Search rate-limited; rotating session');
+                await sleep(rotationCooldownMs);
+                continue;
+            }
+            logger.warn({ term, errorType, err: String(err) }, 'Search scrape failed, skipping');
+            return;
+        } finally {
+            client.close();
+        }
     }
 }

@@ -98,3 +98,13 @@ export interface RawUserByScreenNameResponse {
 export interface RawTweetByIdResponse {
     data?: { tweetResult?: { result?: RawTweetResult } };
 }
+
+export interface RawSearchTimelineResponse {
+    data?: {
+        search_by_raw_query?: {
+            search_timeline?: {
+                timeline?: { instructions?: RawInstruction[] };
+            };
+        };
+    };
+}

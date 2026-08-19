@@ -7,6 +7,7 @@ Built for the Puente Talent / OPUS Senior Full-Stack assessment (v2).
 ## Highlights
 
 - **Guest-reachable surfaces** (required): tweets by author (`UserTweets`), single hydrated tweet (`TweetResultByRestId`), profile by handle (`UserByScreenName`).
+- **Search bonus (`searchTerms`)**: implemented with **runtime auto-detection** — each run probes whether `SearchTimeline` is guest-reachable from its IP/session and either pages results or fails closed with a clear error (never silently empty).
 - **Browserless HTTP**: undici (native fetch) with browser-like headers and Cloudflare cookie warm-up.
 - **Self-healing query IDs**: per-operation GraphQL `queryId`s are extracted at runtime from the x.com JS bundle, with a hard-coded fallback.
 - **Rich filtering**: hashtags, since/until, language, engagement floors, verified-only, media type, replies/retweets, sorting.
@@ -50,8 +51,9 @@ Implemented surfaces (all guest-reachable):
 | Tweets by author | `UserTweets` (profile timeline, cursor-paginated) | `fromUsers` |
 | Single tweet by id | `TweetResultByRestId` (fully hydrated) | `tweetIds` |
 | User profile by handle | `UserByScreenName` | used to resolve author timelines |
+| Free-text search (bonus) | `SearchTimeline` (cursor-paginated) | `searchTerms` |
 
-`searchTerms` (free-text search) is **not implemented** in this build. `SearchTimeline` is auth-walled for guests; per the assessment's guidance, the input is rejected with a clear error rather than silently returning nothing (see [Known limitations](#known-limitations)).
+`searchTerms` (free-text search) is implemented with runtime auto-detection: the run probes `SearchTimeline` from its own session/IP. When reachable (observed with guest auth on residential IPs), it pages results through the same dedup/filter/cap pipeline; when X walls it (measured on a datacenter IP in Aug 2026: 404 across all products while `UserTweets` returned 200 in the same session), the surface fails closed with a clear error and the run summary records `searchCapability: "walled"` — it never silently returns nothing (see [Known limitations](#known-limitations)).
 
 ---
 
@@ -104,14 +106,15 @@ test/                  vitest suites + fixtures
 
 **Run flow**
 
-1. Validate the input at the boundary with zod (reject malformed input / unsupported `searchTerms`).
+1. Validate the input at the boundary with zod (reject malformed input).
 2. Resolve entitlement from `Actor.getEnv().userId` against the server-side KV store. **Fail-closed**: anything unknown = free.
 3. Compute the effective cap: `paid ? maxResults : min(maxResults, 10)`.
 4. For each `fromUsers` handle: resolve the user id (`UserByScreenName`), then page the profile timeline (`UserTweets`) with cursor handling, normalizing and filtering each tweet. Authors are scraped concurrently (pool of 4). Each author uses its own session (own proxy IP when configured).
 5. For each `tweetIds`: hydrate via `TweetResultByRestId`, normalize, filter.
-6. A **global seen-set** de-duplicates across pages and overlapping targets.
-7. Push results through `pushResults()`, which stops at the entitlement cap and flags the run when the free tier applied.
-8. Emit `SUMMARY.json` with requested / fetched / pushed, error counts, and the `limited` flag.
+6. For each `searchTerms`: probe `SearchTimeline` from the term's own session; if reachable, page results (product `Latest`/`Top` per `sortBy`); if walled/rate-limited, log + count it and move on (fail-closed, never silently empty).
+7. A **global seen-set** de-duplicates across pages, terms and overlapping targets.
+8. Push results through `pushResults()`, which stops at the entitlement cap and flags the run when the free tier applied.
+9. Emit `SUMMARY.json` with requested / fetched / pushed, error counts, the `searchCapability` flag, and the `limited` flag.
 
 ---
 
@@ -131,7 +134,7 @@ Empirical findings (verified live):
 2. **Host matters**: the GraphQL endpoint `x.com/i/api/graphql/{queryId}/{operation}` only exists on the **web host** `x.com`. The API hosts (`api.twitter.com` / `api.x.com`) answer `/1.1/*` but return **404** for `/i/api/graphql/*`.
 3. **Cloudflare**: the GraphQL endpoint sits behind Cloudflare. A bare request 403s; you must first **warm up** `https://x.com/home` to collect the Cloudflare (`__cf_bm`) and guest cookies, then replay them on every GraphQL call together with browser-like headers (`sec-ch-ua`, `sec-fetch-*`, `origin`, `referer`, `x-twitter-client-language`, `x-twitter-active-user`).
 4. **Three operations are guest-reachable** and cover all required surfaces: `UserByScreenName`, `UserTweets`, `TweetResultByRestId`.
-5. **`SearchTimeline` is auth-walled** for guests — we rejected `searchTerms` clearly rather than half-implementing it (see [Known limitations](#known-limitations)).
+5. **`SearchTimeline` (search) is probed at runtime**, not assumed. A live probe (Aug 2026) from a datacenter IP returned **404 for every product** (Latest/Top/People/Photos/Videos) while `UserTweets` returned 200 in the same session — X hides auth-walled operations behind 404. Community reports (2026) indicate the operation does open to guests from residential IPs but is restricted (recent window, small caps). The actor probes per run and fails closed when walled (see [Known limitations](#known-limitations)).
 
 ### Query IDs: where they live and why they change
 
@@ -161,7 +164,7 @@ Full JSON Schema in `.actor/INPUT_SCHEMA.json`; validated with zod at the bounda
 |---|---|---|
 | `fromUsers` | `string[]` | Handles (no `@`) whose tweets to scrape |
 | `tweetIds` | `string[]` | Specific tweet IDs to hydrate |
-| `searchTerms` | `string[]` | Free-text queries — **rejected with a clear error** (bonus surface, not implemented) |
+| `searchTerms` | `string[]` | Free-text queries — auto-detected at runtime; fails closed with a clear error when X walls the search surface for guests |
 | `hashtags` | `string[]` | Must contain these hashtags (no `#`) |
 | `since` / `until` | ISO date | Inclusive window on tweet creation time |
 | `language` | ISO-639-1 | Detected tweet language |
@@ -395,7 +398,7 @@ npx tsx scripts/benchmark.ts      # local time-to-100
 npm test   # vitest
 ```
 
-Suites (23 tests):
+Suites (37 tests):
 
 | File | Covers |
 |---|---|
@@ -403,12 +406,13 @@ Suites (23 tests):
 | `test/normalizer.test.ts` | exact §5 mapping, t.co link expansion, date parsing, tombstones, `TweetWithVisibilityResults` |
 | `test/filters.test.ts` | AND semantics for hashtags, window, language, engagement, verified, mediaType, replies/retweets |
 | `test/entitlement.test.ts` | **required cap proof**: free user with `maxResults: 1000` still gets 10; paid run uncapped; enforcement at the push loop with the `limited` flag |
+| `test/surfaces.test.ts` | resilience (429 rotation, graceful degradation) + **search bonus**: supported probe collects, walled probe fails closed, rotation on rate-limited probe, mixed surfaces |
 
 ---
 
 ## Known limitations
 
-- **`searchTerms` is not implemented.** `SearchTimeline` is auth-walled for guests: a plain guest token returns an auth error for the search timeline, while the required surfaces (author timeline, tweet-by-id, profile) are guest-reachable. Per the assessment, we reject `searchTerms` with a clear error instead of silently returning nothing. Options we considered for the bonus (logged-in-session auth, third-party search mirrors) violate the "no personal session" constraint or are unreliable, so we scoped it out honestly. The `/2/tweets/search/*` official API requires paid developer credentials and is out of scope for a guest-token-only actor.
+- **`searchTerms` is implemented with runtime auto-detection and fails closed.** Verified live (Aug 2026): from a datacenter IP, `SearchTimeline` returns **404 for every product** (Latest/Top/People/Photos/Videos) while the guest-reachable surfaces return 200 in the same session — X serves 404 to hide auth-walled operations. Community reports indicate the operation does open to guests from residential IPs, but restricted to a recent window (~7 days) and a small result cap, and it is aggressively rate-limited. The actor therefore probes the operation on every run from its own session/IP: if reachable, `searchTerms` pages results through the normal dedup/filter/cap pipeline; if not, the term is skipped with a logged + counted `SEARCH_WALLED` error and the summary records `searchCapability: "walled"`. With only `searchTerms` in the input and search walled, the run returns zero items with an explicit error — never a silent empty dataset. Run `npx tsx scripts/smoke-search.ts "<term>"` on a residential session to re-verify when one is available. The `/2/tweets/search/*` official API requires paid developer credentials and stays out of scope for a guest-token-only actor.
 - **Guest rate limits.** Guest tokens are rate-limited; the retry/backoff and token rotation keep runs clean, but very large paid runs may need multiple sessions/proxy IPs. The benchmark target (100 items) is well within limits.
 - **Query IDs and feature flags drift** when X deploys. The runtime bundle extraction handles query IDs automatically; feature flags are empirical constants that are updated in `lib/features.ts` on change (documented in the code).
 - **Pinned/highlighted tweets** may repeat across pages; the global seen-set removes them.
@@ -433,5 +437,5 @@ Before running this in production for a client, we'd raise:
 1. **undici over got-scraping** — got-scraping is ESM-only and undici ships first-class proxy support; both are allowed by the assessment. Trade-off: we hand-roll browser headers instead of using got-scraping's header generator.
 2. **Runtime query-ID extraction** — more moving parts than hard-coded IDs, but immune to X deploys; this directly answers the assessment's hint about where IDs live and how they change.
 3. **Server-side KV store entitlement** — the simplest authoritative gate that satisfies the anti-bypass/anti-fork bar without standing up a billing service; fail-closed by design.
-4. **Scoping out `searchTerms`** — honest scoping over a half-working, ban-tripping search. The assessment explicitly rewards knowing when a door is locked and routing around it.
+4. **Search as an auto-detected bonus surface** — instead of hard-coding "search is walled", the actor probes `SearchTimeline` per run/session and only claims the surface when it actually opens. This is honest scoping backed by a live measurement (Aug 2026: 404 for guests on datacenter, working per community reports on residential), and it fails closed — a walled probe never produces a silent empty result. If a future X change makes guest search broadly reachable, no code change is needed.
 5. **Per-session proxies over a shared pool** — one residential session per author keeps a single IP per scrape stream (politeness) while rotating across authors (scale).

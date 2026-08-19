@@ -78,6 +78,9 @@ async function run(): Promise<void> {
         const items = await fetchSurface(input, ctx.cap, entitlement.userId, ctx.stats, state);
         await pushResults(dataset, items, ctx);
         await saveRunState(state);
+        if (input.searchTerms?.length) {
+            logger.info({ searchCapability: ctx.stats.searchCapability ?? 'skipped' }, 'Search surface result');
+        }
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error({ err: message }, 'Run failed');

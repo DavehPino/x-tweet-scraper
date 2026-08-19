@@ -1,3 +1,5 @@
+import { type SearchCapability } from './types.js';
+
 export interface ErrorCounts {
     [errorType: string]: number;
 }
@@ -16,6 +18,8 @@ export interface RunStats {
     errorCounts: ErrorCounts;
     startedAt: string;
     finishedAt?: string;
+    /** Set when searchTerms were requested; reflects what the run observed. */
+    searchCapability?: SearchCapability;
 }
 
 export function createStats(requested: number, startedAt = new Date().toISOString()): RunStats {
@@ -44,6 +48,14 @@ export function markLimited(stats: RunStats, cap: number, reason: string): void 
     stats.limited = true;
     stats.reason = reason;
     stats.cap = cap;
+}
+
+/** Merges a per-session search capability observation into the run summary (best-wins). */
+export function setSearchCapability(stats: RunStats, capability: SearchCapability): void {
+    const rank: Record<SearchCapability, number> = { supported: 3, rate_limited: 2, walled: 1 };
+    if (!stats.searchCapability || rank[capability] > rank[stats.searchCapability]) {
+        stats.searchCapability = capability;
+    }
 }
 
 export function finishStats(stats: RunStats): RunStats {
